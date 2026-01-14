@@ -40,17 +40,17 @@ SPREADSHEET_NAME = os.getenv('SPREADSHEET_NAME', 'Hotel Workflow Data')
 ADMIN_IDS = [int(x) for x in os.getenv('ADMIN_USER_IDS', '').split(',') if x]
 
 # Conversation states
-AWAITING_ROOM, AWAITING_STATUS, AWAITING_ISSUE, AWAITING_TASK = range(4)
-AWAITING_STAFF_ID, AWAITING_STAFF_ROLE, AWAITING_STAFF_NAME, AWAITING_PRIORITY = range(4, 8)
+STAFF_ID, STAFF_NAME, STAFF_ROLE = range(3)
+CLEANING_ROOM, CLEANING_STATUS = range(3, 5)
+MAINTENANCE_ROOM, MAINTENANCE_ISSUE, MAINTENANCE_PRIORITY = range(5, 8)
+TASK_NAME_STATE = range(8, 9)
 
 # Role management
 user_roles = {}
-staff_registry = {}  # {user_id: {'name': str, 'role': str, 'added_date': str, 'status': str}}
+staff_registry = {}
 
-# Cleaning status options
+# Status options
 CLEANING_STATUSES = ['Not Started', 'In Progress', 'Done', 'Pending Review']
-
-# Maintenance priority options
 MAINTENANCE_PRIORITIES = ['Low', 'Medium', 'High', 'Critical']
 
 # Google Sheets setup
@@ -70,7 +70,6 @@ def init_google_sheets():
             sheet = client.create(SPREADSHEET_NAME)
             logger.info(f"Created new spreadsheet: {SPREADSHEET_NAME}")
         
-        # Ensure worksheets exist
         worksheets = {ws.title: ws for ws in sheet.worksheets()}
         
         if 'Cleaning Log' not in worksheets:
@@ -102,7 +101,7 @@ def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS or user_roles.get(user_id) == 'admin'
 
 def is_authorized(user_id: int) -> bool:
-    """Check if user is authorized (admin or registered staff)"""
+    """Check if user is authorized"""
     return is_admin(user_id) or user_id in staff_registry
 
 def log_to_sheet(sheet_name: str, data: list):
@@ -128,7 +127,7 @@ async def notify_admins(context: ContextTypes.DEFAULT_TYPE, message: str):
         except Exception as e:
             logger.error(f"Failed to notify admin {admin_id}: {e}")
 
-# Command Handlers
+# ============= BASIC COMMANDS =============
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
@@ -143,8 +142,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⚠️ *Unauthorized Access*\n\n"
             "You are not registered in the system.\n"
             "Please contact an administrator to get access.\n\n"
-            "Your User ID: `{}`\n"
-            "Share this ID with your admin.".format(user_id),
+            f"Your User ID: `{user_id}`\n"
+            "Share this ID with your admin.",
             parse_mode='Markdown'
         )
         return
@@ -175,7 +174,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /liststaff - View all staff members
 /today - View today's reports
 /weekly - View weekly summary
-/reset - Reset daily task lists
 /staffguide - Admin guide for managing staff
 """
     
@@ -196,62 +194,52 @@ async def getid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
+# ============= STAFF FUNCTIONS =============
+
 async def clean_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /clean command with interactive buttons"""
+    """Handle /clean command"""
     user_id = update.effective_user.id
     
     if not is_authorized(user_id):
         await update.message.reply_text("❌ Unauthorized. Contact admin for access.")
-        return
+        return ConversationHandler.END
     
-    keyboard = [
-        [InlineKeyboardButton("🏨 Enter Room Number", callback_data='clean_start')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
+    context.user_data['action'] = 'cleaning'
     await update.message.reply_text(
-        "🧹 *Room Cleaning*\n\nClick below to start:",
-        reply_markup=reply_markup,
+        "🧹 *Room Cleaning*\n\nPlease enter the room number:",
         parse_mode='Markdown'
     )
+    return CLEANING_ROOM
 
 async def maintenance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /maintenance command with interactive buttons"""
+    """Handle /maintenance command"""
     user_id = update.effective_user.id
     
     if not is_authorized(user_id):
         await update.message.reply_text("❌ Unauthorized. Contact admin for access.")
-        return
+        return ConversationHandler.END
     
-    keyboard = [
-        [InlineKeyboardButton("🔧 Report Issue", callback_data='maintenance_start')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
+    context.user_data['action'] = 'maintenance'
     await update.message.reply_text(
-        "🔧 *Maintenance Report*\n\nClick below to start:",
-        reply_markup=reply_markup,
+        "🔧 *Maintenance Report*\n\nPlease enter the room number:",
         parse_mode='Markdown'
     )
+    return MAINTENANCE_ROOM
 
 async def task_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /task command with interactive buttons"""
+    """Handle /task command"""
     user_id = update.effective_user.id
     
     if not is_authorized(user_id):
         await update.message.reply_text("❌ Unauthorized. Contact admin for access.")
-        return
+        return ConversationHandler.END
     
-    keyboard = [
-        [InlineKeyboardButton("✅ Mark Task Complete", callback_data='task_start')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
+    context.user_data['action'] = 'task'
     await update.message.reply_text(
-        "📝 *Task Management*\n\nClick below to start:",
-        reply_markup=reply_markup,
+        "📝 *Task Management*\n\nPlease enter the task name:",
         parse_mode='Markdown'
     )
+    return TASK_NAME_STATE
 
 async def mystats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show user's activity statistics"""
@@ -307,8 +295,10 @@ Keep up the great work! 💪
         logger.error(f"Failed to get user stats: {e}")
         await update.message.reply_text("❌ Failed to load statistics.")
 
+# ============= ADMIN COMMANDS =============
+
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /admin command - show admin control panel"""
+    """Handle /admin command"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -322,10 +312,6 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ],
         [
             InlineKeyboardButton("👥 Staff List", callback_data='admin_staff'),
-            InlineKeyboardButton("➕ Add Staff", callback_data='admin_addstaff')
-        ],
-        [
-            InlineKeyboardButton("🔄 Reset Tasks", callback_data='admin_reset'),
             InlineKeyboardButton("📋 Full Reports", callback_data='admin_fullreport')
         ]
     ]
@@ -337,161 +323,162 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
-async def addstaff_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start add staff conversation"""
-    # Handle both Update and CallbackQuery objects
-    if hasattr(update, 'effective_user'):
-        user_id = update.effective_user.id
-        reply_func = update.message.reply_text
-    else:  # CallbackQuery
-        user_id = update.from_user.id
-        reply_func = update.edit_message_text
+async def today_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generate today's report"""
+    user_id = update.effective_user.id
     
     if not is_admin(user_id):
-        await reply_func("❌ Access denied. Admin only.")
-        return ConversationHandler.END
+        await update.message.reply_text("❌ Access denied. Admin only.")
+        return
     
-    await reply_func(
-        "➕ *Add New Staff Member*\n\n"
-        "Please provide the staff member's Telegram User ID.\n"
-        "They can get it by messaging /getid to this bot.\n\n"
-        "Send /cancel to abort.",
-        parse_mode='Markdown'
-    )
-    return AWAITING_STAFF_ID
-
-async def receive_staff_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Receive staff ID and ask for name"""
+    if not sheets_client:
+        await update.message.reply_text("❌ Google Sheets not available.")
+        return
+    
     try:
-        staff_id = int(update.message.text.strip())
-        context.user_data['new_staff_id'] = staff_id
+        sheet = sheets_client.open(SPREADSHEET_NAME)
+        today = datetime.now().strftime('%Y-%m-%d')
         
-        await update.message.reply_text(
-            f"✅ User ID: `{staff_id}`\n\n"
-            "Now, please enter the staff member's full name:",
-            parse_mode='Markdown'
-        )
-        return AWAITING_STAFF_NAME
-    except ValueError:
-        await update.message.reply_text("❌ Invalid ID. Please enter a numeric user ID:")
-        return AWAITING_STAFF_ID
+        # Get cleaning data
+        cleaning_ws = sheet.worksheet('Cleaning Log')
+        cleaning_data = cleaning_ws.get_all_records()
+        today_cleaning = [r for r in cleaning_data if today in str(r.get('Timestamp', ''))]
+        
+        # Get maintenance data
+        maintenance_ws = sheet.worksheet('Maintenance Log')
+        maintenance_data = maintenance_ws.get_all_records()
+        today_maintenance = [r for r in maintenance_data if today in str(r.get('Timestamp', ''))]
+        
+        # Get task data
+        tasks_ws = sheet.worksheet('Task Completion Log')
+        tasks_data = tasks_ws.get_all_records()
+        today_tasks = [r for r in tasks_data if today in str(r.get('Timestamp', ''))]
+        
+        # Build report
+        report = f"📊 *Today's Report* ({today})\n\n"
+        
+        # Cleaning section
+        report += f"🧹 *Cleaning:* {len(today_cleaning)} rooms processed\n"
+        if today_cleaning:
+            report += "Recent updates:\n"
+            for item in today_cleaning[-3:]:
+                room = item.get('Room Number', 'N/A')
+                status = item.get('Status', 'N/A')
+                staff = item.get('Staff Name', 'Unknown')
+                report += f"  • Room {room} → {status} ({staff})\n"
+        else:
+            report += "  No entries yet\n"
+        
+        report += "\n"
+        
+        # Maintenance section
+        report += f"🔧 *Maintenance:* {len(today_maintenance)} issues reported\n"
+        if today_maintenance:
+            report += "Recent reports:\n"
+            for item in today_maintenance[-3:]:
+                room = item.get('Room Number', 'N/A')
+                issue = str(item.get('Issue', 'N/A'))[:40]
+                priority = item.get('Priority', 'N/A')
+                report += f"  • Room {room}: {issue} ({priority})\n"
+        else:
+            report += "  No issues reported\n"
+        
+        report += "\n"
+        
+        # Tasks section
+        report += f"✅ *Tasks:* {len(today_tasks)} completed\n"
+        if today_tasks:
+            report += "Recent tasks:\n"
+            for item in today_tasks[-3:]:
+                task = item.get('Task Name', 'N/A')
+                staff = item.get('Staff Name', 'Unknown')
+                report += f"  • {task} ({staff})\n"
+        else:
+            report += "  No tasks completed\n"
+        
+        report += "\n📊 Use /admin for more options."
+        
+        await update.message.reply_text(report, parse_mode='Markdown')
+        logger.info(f"Today's report generated for admin {user_id}")
+        
+    except Exception as e:
+        logger.error(f"Failed to generate today's report: {e}")
+        await update.message.reply_text(f"❌ Failed to generate report: {str(e)}")
 
-async def receive_staff_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Receive staff name and ask for role"""
-    staff_name = update.message.text.strip()
-    context.user_data['new_staff_name'] = staff_name
-    
-    keyboard = [
-        [InlineKeyboardButton("👔 Staff", callback_data='role_staff')],
-        [InlineKeyboardButton("👨‍💼 Admin", callback_data='role_admin')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        f"✅ Name: {staff_name}\n\n"
-        "Select role for this staff member:",
-        reply_markup=reply_markup
-    )
-    return AWAITING_STAFF_ROLE
-
-async def finalize_staff_addition(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Finalize staff addition"""
-    query = update.callback_query
-    await query.answer()
-    
-    role = 'admin' if query.data == 'role_admin' else 'staff'
-    staff_id = context.user_data['new_staff_id']
-    staff_name = context.user_data['new_staff_name']
-    
-    # Add to registry
-    staff_registry[staff_id] = {
-        'name': staff_name,
-        'role': role,
-        'added_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'status': 'active'
-    }
-    user_roles[staff_id] = role
-    
-    # Log to Google Sheets
-    log_to_sheet('Staff Registry', [
-        staff_id,
-        staff_name,
-        role,
-        datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'active'
-    ])
-    
-    await query.edit_message_text(
-        f"✅ *Staff Added Successfully!*\n\n"
-        f"Name: {staff_name}\n"
-        f"User ID: `{staff_id}`\n"
-        f"Role: {role.upper()}\n\n"
-        f"They can now use the bot.",
-        parse_mode='Markdown'
-    )
-    
-    # Notify the new staff member
-    try:
-        await context.bot.send_message(
-            chat_id=staff_id,
-            text=f"🎉 Welcome to Hotel Workflow Bot!\n\n"
-                 f"You've been registered as: *{role.upper()}*\n"
-                 f"Send /start to begin.",
-            parse_mode='Markdown'
-        )
-    except:
-        pass
-    
-    return ConversationHandler.END
-
-async def removestaff_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Remove staff member"""
-    # Handle both Update and CallbackQuery objects
-    if hasattr(update, 'effective_user'):
-        user_id = update.effective_user.id
-        reply_func = update.message.reply_text
-    else:  # CallbackQuery
-        user_id = update.from_user.id
-        reply_func = update.edit_message_text
+async def weekly_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generate weekly summary"""
+    user_id = update.effective_user.id
     
     if not is_admin(user_id):
-        await reply_func("❌ Access denied. Admin only.")
+        await update.message.reply_text("❌ Access denied. Admin only.")
         return
     
-    if not staff_registry:
-        await update.message.reply_text("📭 No staff members registered yet.")
+    if not sheets_client:
+        await update.message.reply_text("❌ Google Sheets not available.")
         return
     
-    keyboard = []
-    for sid, info in staff_registry.items():
-        keyboard.append([InlineKeyboardButton(
-            f"❌ {info['name']} ({info['role']})",
-            callback_data=f'remove_{sid}'
-        )])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "🗑️ *Remove Staff Member*\n\nSelect staff to remove:",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
+    try:
+        sheet = sheets_client.open(SPREADSHEET_NAME)
+        week_ago = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+        today = datetime.now().strftime('%Y-%m-%d')
+        
+        # Get cleaning data
+        cleaning_ws = sheet.worksheet('Cleaning Log')
+        cleaning_data = cleaning_ws.get_all_records()
+        week_cleaning = [r for r in cleaning_data if str(r.get('Timestamp', '')) >= week_ago]
+        
+        # Get maintenance data
+        maintenance_ws = sheet.worksheet('Maintenance Log')
+        maintenance_data = maintenance_ws.get_all_records()
+        week_maintenance = [r for r in maintenance_data if str(r.get('Timestamp', '')) >= week_ago]
+        
+        # Get task data
+        tasks_ws = sheet.worksheet('Task Completion Log')
+        tasks_data = tasks_ws.get_all_records()
+        week_tasks = [r for r in tasks_data if str(r.get('Timestamp', '')) >= week_ago]
+        
+        # Build report
+        report = f"📈 *Weekly Summary*\n({week_ago} to {today})\n\n"
+        
+        report += f"🧹 *Cleaning:* {len(week_cleaning)} rooms cleaned\n"
+        report += f"🔧 *Maintenance:* {len(week_maintenance)} issues reported\n"
+        report += f"✅ *Tasks:* {len(week_tasks)} tasks completed\n\n"
+        
+        # Top performers
+        report += "📊 *Top Performers:*\n"
+        staff_activity = {}
+        for item in week_cleaning + week_maintenance + week_tasks:
+            staff_name = item.get('Staff Name', 'Unknown')
+            if staff_name and staff_name != 'Unknown':
+                staff_activity[staff_name] = staff_activity.get(staff_name, 0) + 1
+        
+        if staff_activity:
+            sorted_staff = sorted(staff_activity.items(), key=lambda x: x[1], reverse=True)
+            for i, (name, count) in enumerate(sorted_staff[:5], 1):
+                emoji = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'][i-1]
+                report += f"{emoji} {name}: {count} activities\n"
+        else:
+            report += "No staff activity this week.\n"
+        
+        report += "\n📊 Use /admin for more options."
+        
+        await update.message.reply_text(report, parse_mode='Markdown')
+        logger.info(f"Weekly report generated for admin {user_id}")
+        
+    except Exception as e:
+        logger.error(f"Failed to generate weekly report: {e}")
+        await update.message.reply_text(f"❌ Failed to generate report: {str(e)}")
 
 async def liststaff_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List all staff members"""
-    # Handle both Update and CallbackQuery objects
-    if hasattr(update, 'effective_user'):
-        user_id = update.effective_user.id
-        reply_func = update.message.reply_text
-    else:  # CallbackQuery
-        user_id = update.from_user.id
-        reply_func = update.edit_message_text
+    user_id = update.effective_user.id
     
     if not is_admin(user_id):
-        await reply_func("❌ Access denied. Admin only.")
+        await update.message.reply_text("❌ Access denied. Admin only.")
         return
     
     if not staff_registry:
-        await reply_func("📭 No staff members registered yet.\n\nUse /addstaff to add members.")
+        await update.message.reply_text("📭 No staff members registered yet.\n\nUse /addstaff to add members.")
         return
     
     staff_list = "👥 *Registered Staff Members*\n\n"
@@ -514,8 +501,34 @@ async def liststaff_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(staff_list, parse_mode='Markdown')
 
+async def removestaff_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Remove staff member"""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ Access denied. Admin only.")
+        return
+    
+    if not staff_registry:
+        await update.message.reply_text("📭 No staff members registered yet.")
+        return
+    
+    keyboard = []
+    for sid, info in staff_registry.items():
+        keyboard.append([InlineKeyboardButton(
+            f"❌ {info['name']} ({info['role']})",
+            callback_data=f'remove_{sid}'
+        )])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        "🗑️ *Remove Staff Member*\n\nSelect staff to remove:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
 async def staffguide_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show admin guide for managing staff"""
+    """Show admin guide"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -525,303 +538,184 @@ async def staffguide_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     guide = """
 👨‍💼 *Admin Guide: Managing Staff*
 
-**How to Add Staff Members:**
-
-1. Use the command: /addstaff
-2. Enter the staff member's User ID (they get it with /getid)
+**Adding Staff:**
+1. Use /addstaff
+2. Enter staff's User ID (they get it via /getid)
 3. Enter their full name
-4. Select their role (Staff or Admin)
-5. They'll receive a welcome message and can start using the bot
+4. Select role (Staff/Admin)
 
-**How to View Staff:**
+**Viewing Staff:**
+Use /liststaff to see all registered staff
 
-Use: /liststaff
-Shows all registered staff with their roles and join dates.
+**Removing Staff:**
+Use /removestaff and select from list
 
-**How to Remove Staff:**
+**Roles:**
+👔 Staff - Can log activities
+👨‍💼 Admin - Can manage staff & view reports
 
-Use: /removestaff
-Select the staff member to remove from the list.
+**Daily Operations:**
+• /today - Today's activity report
+• /weekly - Weekly summary
+• /admin - Quick admin panel
 
-**Roles Explanation:**
-
-👔 *Staff:* Can log cleaning, maintenance, and tasks
-👨‍💼 *Admin:* Can manage staff, view reports, and reset tasks
-
-**Tips:**
-• Always verify User IDs before adding staff
-• Staff need to send /getid command to get their User ID
-• Use /today for daily reports
-• Use /weekly for weekly summaries
-• Use /liststaff to manage staff efficiently
-
-**Workflow for New Staff:**
-1. New staff member sends /getid to bot
-2. They share the User ID with you
-3. You use /addstaff with their ID
-4. System automatically welcomes them
-5. They send /start to begin working
-
-Need more help? Contact the bot developer.
+Need help? Contact the bot developer.
 """
     
     await update.message.reply_text(guide, parse_mode='Markdown')
 
-async def today_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /today command - view today's reports"""
-    # Handle both Update and CallbackQuery objects
-    if hasattr(update, 'effective_user'):
-        user_id = update.effective_user.id
-        reply_func = update.message.reply_text
-    else:  # CallbackQuery
-        user_id = update.from_user.id
-        reply_func = update.edit_message_text
-    
-    if not is_admin(user_id):
-        await reply_func("❌ Access denied. Admin only.")
-        return
-    
-    if not sheets_client:
-        await reply_func("❌ Google Sheets not available.")
-        return
-    
-    try:
-        sheet = sheets_client.open(SPREADSHEET_NAME)
-        today = datetime.now().strftime('%Y-%m-%d')
-        
-        cleaning_ws = sheet.worksheet('Cleaning Log')
-        cleaning_data = cleaning_ws.get_all_records()
-        today_cleaning = [r for r in cleaning_data if today in str(r.get('Timestamp', ''))]
-        
-        maintenance_ws = sheet.worksheet('Maintenance Log')
-        maintenance_data = maintenance_ws.get_all_records()
-        today_maintenance = [r for r in maintenance_data if today in str(r.get('Timestamp', ''))]
-        
-        tasks_ws = sheet.worksheet('Task Completion Log')
-        tasks_data = tasks_ws.get_all_records()
-        today_tasks = [r for r in tasks_data if today in str(r.get('Timestamp', ''))]
-        
-        report = f"""
-📊 *Today's Report* ({today})
+# ============= STAFF MANAGEMENT CONVERSATION =============
 
-🧹 *Cleaning:* {len(today_cleaning)} rooms processed
-"""
-        
-        # Show cleaning details with safe indexing
-        if today_cleaning and len(today_cleaning) > 0:
-            report += "\nRecent cleaning activities:\n"
-            for item in today_cleaning[-3:]:
-                room = item.get('Room Number', 'N/A')
-                status = item.get('Status', 'N/A')
-                staff = item.get('Staff Name', 'Unknown')
-                report += f"  • Room {room} - {status} (by {staff})\n"
-        
-        report += f"\n🔧 *Maintenance:* {len(today_maintenance)} issues reported\n"
-        
-        # Show maintenance details with safe indexing
-        if today_maintenance and len(today_maintenance) > 0:
-            report += "Recent maintenance reports:\n"
-            for item in today_maintenance[-3:]:
-                room = item.get('Room Number', 'N/A')
-                issue = item.get('Issue', 'N/A')
-                priority = item.get('Priority', 'N/A')
-                staff = item.get('Staff Name', 'Unknown')
-                report += f"  • Room {room}: {issue[:30]}... (Priority: {priority}, by {staff})\n"
-        
-        report += f"\n✅ *Tasks:* {len(today_tasks)} completed\n"
-        
-        # Show task details with safe indexing
-        if today_tasks and len(today_tasks) > 0:
-            report += "Recently completed tasks:\n"
-            for item in today_tasks[-3:]:
-                task = item.get('Task Name', 'N/A')
-                staff = item.get('Staff Name', 'Unknown')
-                report += f"  • {task} (by {staff})\n"
-        
-        report += "\nUse /admin for more options."
-        
-        await reply_func(report, parse_mode='Markdown')
-        
-    except IndexError as e:
-        logger.error(f"Index error in today's report: {e}")
-        await reply_func("❌ Error generating report. The data might be empty or corrupted. Please try again later.")
-    except Exception as e:
-        logger.error(f"Failed to generate today's report: {e}")
-        await reply_func("❌ Failed to generate report. Please try again later.")
-
-async def weekly_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Generate weekly summary"""
-    # Handle both Update and CallbackQuery objects
-    if hasattr(update, 'effective_user'):
-        user_id = update.effective_user.id
-        reply_func = update.message.reply_text
-    else:  # CallbackQuery
-        user_id = update.from_user.id
-        reply_func = update.edit_message_text
-    
-    if not is_admin(user_id):
-        await reply_func("❌ Access denied. Admin only.")
-        return
-    
-    if not sheets_client:
-        await reply_func("❌ Google Sheets not available.")
-        return
-    
-    try:
-        sheet = sheets_client.open(SPREADSHEET_NAME)
-        week_ago = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
-        today = datetime.now().strftime('%Y-%m-%d')
-        
-        cleaning_ws = sheet.worksheet('Cleaning Log')
-        cleaning_data = cleaning_ws.get_all_records()
-        week_cleaning = [r for r in cleaning_data if str(r.get('Timestamp', '')) >= week_ago]
-        
-        maintenance_ws = sheet.worksheet('Maintenance Log')
-        maintenance_data = maintenance_ws.get_all_records()
-        week_maintenance = [r for r in maintenance_data if str(r.get('Timestamp', '')) >= week_ago]
-        
-        tasks_ws = sheet.worksheet('Task Completion Log')
-        tasks_data = tasks_ws.get_all_records()
-        week_tasks = [r for r in tasks_data if str(r.get('Timestamp', '')) >= week_ago]
-        
-        report = f"""
-📈 *Weekly Summary*
-(From {week_ago} to {today})
-
-🧹 *Cleaning:* {len(week_cleaning)} rooms processed
-🔧 *Maintenance:* {len(week_maintenance)} issues reported
-✅ *Tasks:* {len(week_tasks)} completed
-
-📊 *Top Performers:*
-"""
-        
-        # Count activities by staff with safe access
-        staff_activity = {}
-        for item in week_cleaning + week_maintenance + week_tasks:
-            staff_name = item.get('Staff Name', 'Unknown')
-            if staff_name and staff_name != 'Unknown':
-                staff_activity[staff_name] = staff_activity.get(staff_name, 0) + 1
-        
-        if staff_activity:
-            sorted_staff = sorted(staff_activity.items(), key=lambda x: x[1], reverse=True)
-            for i, (name, count) in enumerate(sorted_staff[:5], 1):
-                emoji = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'][i-1]
-                report += f"{emoji} {name}: {count} activities\n"
-        else:
-            report += "No activity recorded this week.\n"
-        
-        await reply_func(report, parse_mode='Markdown')
-        
-    except Exception as e:
-        logger.error(f"Failed to generate weekly report: {e}")
-        await reply_func("❌ Failed to generate weekly report.")
-
-async def reset_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /reset command"""
+async def addstaff_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start add staff conversation"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
         await update.message.reply_text("❌ Access denied. Admin only.")
-        return
+        return ConversationHandler.END
+    
+    await update.message.reply_text(
+        "➕ *Add New Staff Member*\n\n"
+        "Please provide the staff member's Telegram User ID.\n"
+        "They can get it by messaging /getid to this bot.\n\n"
+        "Send /cancel to abort.",
+        parse_mode='Markdown'
+    )
+    return STAFF_ID
+
+async def receive_staff_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Receive staff ID"""
+    try:
+        staff_id = int(update.message.text.strip())
+        context.user_data['new_staff_id'] = staff_id
+        
+        await update.message.reply_text(
+            f"✅ User ID: `{staff_id}`\n\n"
+            "Now, please enter the staff member's full name:",
+            parse_mode='Markdown'
+        )
+        return STAFF_NAME
+    except ValueError:
+        await update.message.reply_text("❌ Invalid ID. Please enter a numeric user ID:")
+        return STAFF_ID
+
+async def receive_staff_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Receive staff name"""
+    staff_name = update.message.text.strip()
+    context.user_data['new_staff_name'] = staff_name
     
     keyboard = [
-        [InlineKeyboardButton("✅ Yes, Reset", callback_data='confirm_reset')],
-        [InlineKeyboardButton("❌ Cancel", callback_data='cancel_reset')]
+        [InlineKeyboardButton("👔 Staff", callback_data='role_staff')],
+        [InlineKeyboardButton("👨‍💼 Admin", callback_data='role_admin')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        "⚠️ *Reset Daily Tasks*\n\n"
-        "This will clear today's pending tasks.\n"
-        "Completed tasks will remain in logs.\n\n"
-        "Are you sure?",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
+        f"✅ Name: {staff_name}\n\n"
+        "Select role for this staff member:",
+        reply_markup=reply_markup
     )
+    return STAFF_ROLE
 
-async def safe_edit_message(query, text=None, reply_markup=None, parse_mode=None):
-    """Safely edit message, handling the case where nothing changed"""
-    try:
-        if text is None:
-            # If no text provided, just update the keyboard
-            await query.edit_message_reply_markup(reply_markup=reply_markup)
-        else:
-            await query.edit_message_text(
-                text=text,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode
-            )
-    except TelegramError as e:
-        if "Message is not modified" in str(e):
-            # Message hasn't changed, just answer the query silently
-            pass
-        else:
-            logger.error(f"Telegram error: {e}")
-
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle all button callbacks"""
+async def finalize_staff_addition(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Finalize staff addition"""
     query = update.callback_query
     await query.answer()
     
-    user_id = query.from_user.id
+    role = 'admin' if query.data == 'role_admin' else 'staff'
+    staff_id = context.user_data.get('new_staff_id')
+    staff_name = context.user_data.get('new_staff_name')
+    
+    staff_registry[staff_id] = {
+        'name': staff_name,
+        'role': role,
+        'added_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'status': 'active'
+    }
+    user_roles[staff_id] = role
+    
+    log_to_sheet('Staff Registry', [
+        staff_id,
+        staff_name,
+        role,
+        datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'active'
+    ])
+    
+    await query.edit_message_text(
+        f"✅ *Staff Added Successfully!*\n\n"
+        f"Name: {staff_name}\n"
+        f"User ID: `{staff_id}`\n"
+        f"Role: {role.upper()}\n\n"
+        f"They can now use the bot.",
+        parse_mode='Markdown'
+    )
+    
+    try:
+        await context.bot.send_message(
+            chat_id=staff_id,
+            text=f"🎉 Welcome to Hotel Workflow Bot!\n\n"
+                 f"You've been registered as: *{role.upper()}*\n"
+                 f"Send /start to begin.",
+            parse_mode='Markdown'
+        )
+    except:
+        pass
+    
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel conversation"""
+    context.user_data.clear()
+    await update.message.reply_text("❌ Operation cancelled.")
+    return ConversationHandler.END
+
+# ============= BUTTON CALLBACKS =============
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle button callbacks"""
+    query = update.callback_query
+    await query.answer()
+    
     data = query.data
+    user = query.from_user
+    user_id = user.id
     
-    # Cleaning flow
-    if data == 'clean_start':
-        await safe_edit_message(query, text="🏨 Please enter the room number:")
-        context.user_data['action'] = 'cleaning'
-        return AWAITING_ROOM
-    
-    elif data.startswith('clean_status_'):
+    # Cleaning status selection
+    if data.startswith('clean_status_'):
         status = data.replace('clean_status_', '').replace('_', ' ')
         room = context.user_data.get('room_number')
-        user = query.from_user
         
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         log_data = [timestamp, room, user.first_name, user.id, status, '']
         
         if log_to_sheet('Cleaning Log', log_data):
-            await safe_edit_message(query, text=f"✅ Room {room} marked as: *{status}*", parse_mode='Markdown')
+            await query.edit_message_text(f"✅ Room {room} marked as: *{status}*", parse_mode='Markdown')
             await notify_admins(
                 context,
                 f"🧹 *Cleaning Update*\nRoom: {room}\nStatus: {status}\nStaff: {user.first_name}"
             )
         else:
-            await safe_edit_message(query, text="❌ Failed to log. Please try again.")
+            await query.edit_message_text("❌ Failed to log. Please try again.")
+        
+        context.user_data.clear()
     
-    # Maintenance flow
-    elif data == 'maintenance_start':
-        await safe_edit_message(query, text="🏨 Please enter the room number for maintenance:")
-        context.user_data['action'] = 'maintenance'
-        return AWAITING_ROOM
-    
-    elif data.startswith('maint_issue_'):
-        # Skip to priority selection after issue is captured
-        priority_keyboard = [[InlineKeyboardButton(f"🔴 {p}", callback_data=f'maint_priority_{p.lower()}')] for p in MAINTENANCE_PRIORITIES]
-        await safe_edit_message(
-            query,
-            text=f"📍 Room: {context.user_data.get('room_number')}\n"
-                f"⚠️ Issue: {context.user_data.get('issue_description')}\n\n"
-                f"Select priority level:",
-            reply_markup=InlineKeyboardMarkup(priority_keyboard)
-        )
-    
+    # Maintenance priority selection
     elif data.startswith('maint_priority_'):
         priority = data.replace('maint_priority_', '').upper()
         room = context.user_data.get('room_number')
         issue = context.user_data.get('issue_description')
-        user = query.from_user
         
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         log_data = [timestamp, room, issue, user.first_name, user.id, priority, 'Open']
         
         if log_to_sheet('Maintenance Log', log_data):
-            await safe_edit_message(
-                query,
-                text=f"✅ *Maintenance Reported*\n\n"
-                    f"Room: {room}\n"
-                    f"Issue: {issue}\n"
-                    f"Priority: {priority}",
+            await query.edit_message_text(
+                f"✅ *Maintenance Reported*\n\n"
+                f"Room: {room}\n"
+                f"Issue: {issue}\n"
+                f"Priority: {priority}",
                 parse_mode='Markdown'
             )
             await notify_admins(
@@ -829,36 +723,172 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"⚠️ *Maintenance Report*\nRoom: {room}\nIssue: {issue}\nPriority: {priority}\nBy: {user.first_name}"
             )
         else:
-            await safe_edit_message(query, text="❌ Failed to log. Please try again.")
+            await query.edit_message_text("❌ Failed to log. Please try again.")
+        
+        context.user_data.clear()
     
-    # Task flow
-    elif data == 'task_start':
-        await safe_edit_message(query, text="📝 Please enter the task name:")
-        context.user_data['action'] = 'task'
-        return AWAITING_TASK
-    
-    # Admin panel callbacks
+    # Admin panel callbacks - generate reports directly
     elif data == 'admin_today':
-        await today_report(query, context)
+        if not is_admin(user_id):
+            await query.answer("❌ Access denied")
+            return
+        
+        if not sheets_client:
+            await query.edit_message_text("❌ Google Sheets not available.")
+            return
+        
+        try:
+            sheet = sheets_client.open(SPREADSHEET_NAME)
+            today = datetime.now().strftime('%Y-%m-%d')
+            
+            # Get all data
+            cleaning_ws = sheet.worksheet('Cleaning Log')
+            cleaning_data = cleaning_ws.get_all_records()
+            today_cleaning = [r for r in cleaning_data if today in str(r.get('Timestamp', ''))]
+            
+            maintenance_ws = sheet.worksheet('Maintenance Log')
+            maintenance_data = maintenance_ws.get_all_records()
+            today_maintenance = [r for r in maintenance_data if today in str(r.get('Timestamp', ''))]
+            
+            tasks_ws = sheet.worksheet('Task Completion Log')
+            tasks_data = tasks_ws.get_all_records()
+            today_tasks = [r for r in tasks_data if today in str(r.get('Timestamp', ''))]
+            
+            # Build report
+            report = f"📊 *Today's Report* ({today})\n\n"
+            
+            report += f"🧹 *Cleaning:* {len(today_cleaning)} rooms processed\n"
+            if today_cleaning:
+                report += "Recent updates:\n"
+                for item in today_cleaning[-3:]:
+                    room = item.get('Room Number', 'N/A')
+                    status = item.get('Status', 'N/A')
+                    staff = item.get('Staff Name', 'Unknown')
+                    report += f"  • Room {room} → {status} ({staff})\n"
+            else:
+                report += "  No entries yet\n"
+            
+            report += "\n"
+            
+            report += f"🔧 *Maintenance:* {len(today_maintenance)} issues reported\n"
+            if today_maintenance:
+                report += "Recent reports:\n"
+                for item in today_maintenance[-3:]:
+                    room = item.get('Room Number', 'N/A')
+                    issue = str(item.get('Issue', 'N/A'))[:40]
+                    priority = item.get('Priority', 'N/A')
+                    report += f"  • Room {room}: {issue} ({priority})\n"
+            else:
+                report += "  No issues reported\n"
+            
+            report += "\n"
+            
+            report += f"✅ *Tasks:* {len(today_tasks)} completed\n"
+            if today_tasks:
+                report += "Recent tasks:\n"
+                for item in today_tasks[-3:]:
+                    task = item.get('Task Name', 'N/A')
+                    staff = item.get('Staff Name', 'Unknown')
+                    report += f"  • {task} ({staff})\n"
+            else:
+                report += "  No tasks completed\n"
+            
+            await query.edit_message_text(report, parse_mode='Markdown')
+            
+        except Exception as e:
+            logger.error(f"Failed to generate today's report from callback: {e}")
+            await query.edit_message_text(f"❌ Failed to generate report: {str(e)}")
     
     elif data == 'admin_weekly':
-        await weekly_report(query, context)
+        if not is_admin(user_id):
+            await query.answer("❌ Access denied")
+            return
+        
+        if not sheets_client:
+            await query.edit_message_text("❌ Google Sheets not available.")
+            return
+        
+        try:
+            sheet = sheets_client.open(SPREADSHEET_NAME)
+            week_ago = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+            today = datetime.now().strftime('%Y-%m-%d')
+            
+            # Get all data
+            cleaning_ws = sheet.worksheet('Cleaning Log')
+            cleaning_data = cleaning_ws.get_all_records()
+            week_cleaning = [r for r in cleaning_data if str(r.get('Timestamp', '')) >= week_ago]
+            
+            maintenance_ws = sheet.worksheet('Maintenance Log')
+            maintenance_data = maintenance_ws.get_all_records()
+            week_maintenance = [r for r in maintenance_data if str(r.get('Timestamp', '')) >= week_ago]
+            
+            tasks_ws = sheet.worksheet('Task Completion Log')
+            tasks_data = tasks_ws.get_all_records()
+            week_tasks = [r for r in tasks_data if str(r.get('Timestamp', '')) >= week_ago]
+            
+            # Build report
+            report = f"📈 *Weekly Summary*\n({week_ago} to {today})\n\n"
+            
+            report += f"🧹 *Cleaning:* {len(week_cleaning)} rooms cleaned\n"
+            report += f"🔧 *Maintenance:* {len(week_maintenance)} issues reported\n"
+            report += f"✅ *Tasks:* {len(week_tasks)} tasks completed\n\n"
+            
+            # Top performers
+            report += "📊 *Top Performers:*\n"
+            staff_activity = {}
+            for item in week_cleaning + week_maintenance + week_tasks:
+                staff_name = item.get('Staff Name', 'Unknown')
+                if staff_name and staff_name != 'Unknown':
+                    staff_activity[staff_name] = staff_activity.get(staff_name, 0) + 1
+            
+            if staff_activity:
+                sorted_staff = sorted(staff_activity.items(), key=lambda x: x[1], reverse=True)
+                for i, (name, count) in enumerate(sorted_staff[:5], 1):
+                    emoji = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'][i-1]
+                    report += f"{emoji} {name}: {count} activities\n"
+            else:
+                report += "No staff activity this week.\n"
+            
+            await query.edit_message_text(report, parse_mode='Markdown')
+            
+        except Exception as e:
+            logger.error(f"Failed to generate weekly report from callback: {e}")
+            await query.edit_message_text(f"❌ Failed to generate report: {str(e)}")
     
     elif data == 'admin_staff':
-        await liststaff_command(query, context)
-    
-    elif data == 'admin_addstaff':
-        await addstaff_command(query, context)
-    
-    elif data == 'admin_reset':
-        await safe_edit_message(query, text="🔄 Daily tasks have been reset.")
+        if not is_admin(user_id):
+            await query.answer("❌ Access denied")
+            return
+        
+        if not staff_registry:
+            await query.edit_message_text("📭 No staff members registered yet.\n\nUse /addstaff to add members.")
+            return
+        
+        staff_list = "👥 *Registered Staff Members*\n\n"
+        
+        admins = [info for sid, info in staff_registry.items() if info['role'] == 'admin']
+        staff = [info for sid, info in staff_registry.items() if info['role'] == 'staff']
+        
+        if admins:
+            staff_list += "👨‍💼 *Admins:*\n"
+            for info in admins:
+                staff_list += f"• {info['name']} (Added: {info['added_date'][:10]})\n"
+            staff_list += "\n"
+        
+        if staff:
+            staff_list += "👔 *Staff:*\n"
+            for info in staff:
+                staff_list += f"• {info['name']} (Added: {info['added_date'][:10]})\n"
+        
+        staff_list += f"\n📊 Total: {len(staff_registry)} members"
+        
+        await query.edit_message_text(staff_list, parse_mode='Markdown')
     
     elif data == 'admin_fullreport':
-        await safe_edit_message(
-            query,
-            text="📋 *Full Reports Available in Google Sheets*\n\n"
-                f"Sheet: {SPREADSHEET_NAME}\n\n"
-                "Access your Google Sheets to view complete data.",
+        await query.edit_message_text(
+            f"📋 *Full Reports in Google Sheets*\n\n"
+            f"Sheet: {SPREADSHEET_NAME}\n\n"
+            "Access Google Sheets for complete data.",
             parse_mode='Markdown'
         )
     
@@ -869,70 +899,142 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             del staff_registry[staff_id]
             if staff_id in user_roles:
                 del user_roles[staff_id]
-            await safe_edit_message(query, text=f"✅ Staff member '{staff_name}' has been removed.")
+            await query.edit_message_text(f"✅ '{staff_name}' has been removed.")
+            
+            try:
+                await context.bot.send_message(
+                    chat_id=staff_id,
+                    text="⚠️ Your access has been revoked. Contact admin if needed."
+                )
+            except:
+                pass
         else:
-            await safe_edit_message(query, text="❌ Staff member not found.")
+            await query.edit_message_text("❌ Staff member not found.")
+
+# ============= TEXT INPUT HANDLER =============
+
+async def handle_cleaning_room(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle room number input for cleaning"""
+    user_id = update.effective_user.id
     
-    elif data == 'confirm_reset':
-        await safe_edit_message(query, text="✅ Tasks reset for the day.")
+    if not is_authorized(user_id):
+        await update.message.reply_text("❌ Unauthorized.")
+        return ConversationHandler.END
     
-    elif data == 'cancel_reset':
-        await query.edit_message_text("❌ Reset cancelled.")
+    room_number = update.message.text.strip()
+    context.user_data['room_number'] = room_number
+    
+    keyboard = [[InlineKeyboardButton(status, callback_data=f'clean_status_{status.replace(" ", "_")}')] for status in CLEANING_STATUSES]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        f"✅ Room {room_number} selected.\n\nSelect status:",
+        reply_markup=reply_markup
+    )
+    return CLEANING_STATUS
+
+async def handle_maintenance_room(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle room number input for maintenance"""
+    user_id = update.effective_user.id
+    
+    if not is_authorized(user_id):
+        await update.message.reply_text("❌ Unauthorized.")
+        return ConversationHandler.END
+    
+    room_number = update.message.text.strip()
+    context.user_data['room_number'] = room_number
+    
+    await update.message.reply_text("🔧 Describe the issue:")
+    return MAINTENANCE_ISSUE
+
+async def handle_maintenance_issue(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle issue description for maintenance"""
+    issue = update.message.text.strip()
+    context.user_data['issue_description'] = issue
+    
+    keyboard = [[InlineKeyboardButton(f"{'🔴' if p == 'Critical' else '🟠' if p == 'High' else '🟡'} {p}", 
+                                   callback_data=f'maint_priority_{p.lower()}')] for p in MAINTENANCE_PRIORITIES]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        f"Room: {context.user_data['room_number']}\n"
+        f"Issue: {issue}\n\n"
+        f"Select priority:",
+        reply_markup=reply_markup
+    )
+    return MAINTENANCE_PRIORITY
+
+async def handle_task_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle task name input"""
+    user = update.effective_user
+    user_id = user.id
+    
+    if not is_authorized(user_id):
+        await update.message.reply_text("❌ Unauthorized.")
+        return ConversationHandler.END
+    
+    task_name = update.message.text.strip()
+    
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    log_data = [timestamp, task_name, user.first_name, user.id, 'Completed']
+    
+    if log_to_sheet('Task Completion Log', log_data):
+        await update.message.reply_text(f"✅ Task completed: {task_name}")
+        await notify_admins(
+            context,
+            f"📝 *Task Completed*\nTask: {task_name}\nBy: {user.first_name}"
+        )
+    else:
+        await update.message.reply_text("❌ Failed to log task.")
+    
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show help message for non-command messages"""
+    user_id = update.effective_user.id
+    
+    if not is_authorized(user_id):
+        await update.message.reply_text(
+            "⚠️ *Unauthorized Access*\n\n"
+            "You are not registered in the system.\n"
+            "Please contact an administrator to get access.\n\n"
+            f"Your User ID: `{user_id}`",
+            parse_mode='Markdown'
+        )
+        return
+    
+    help_msg = """
+📋 *Available Commands:*
+
+🧹 *Staff Commands:*
+/clean - Mark room cleaning progress
+/maintenance - Report maintenance issue
+/task - Mark task as completed
+/mystats - View your activity stats
+
+"""
+    
+    if is_admin(user_id):
+        help_msg += """🔧 *Admin Commands:*
+/admin - Open admin control panel
+/addstaff - Register new staff member
+/removestaff - Remove staff member
+/liststaff - View all staff members
+/today - View today's reports
+/weekly - View weekly summary
+/staffguide - Admin guide for managing staff
+"""
+    
+    help_msg += "\n💡 Send /start to see the welcome message"
+    
+    await update.message.reply_text(help_msg, parse_mode='Markdown')
 
 async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle text input for various flows"""
-    user_id = update.effective_user.id
-    text = update.message.text.strip()
-    action = context.user_data.get('action')
-    
-    if action == 'cleaning':
-        if 'room_number' not in context.user_data:
-            context.user_data['room_number'] = text
-            
-            # Show status options
-            keyboard = [[InlineKeyboardButton(status, callback_data=f'clean_status_{status.replace(" ", "_")}')] for status in CLEANING_STATUSES]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await update.message.reply_text(
-                f"Room {text} selected.\n\nSelect cleaning status:",
-                reply_markup=reply_markup
-            )
-    
-    elif action == 'maintenance':
-        if 'room_number' not in context.user_data:
-            context.user_data['room_number'] = text
-            await update.message.reply_text("🔧 Please describe the maintenance issue:")
-        elif 'issue_description' not in context.user_data:
-            context.user_data['issue_description'] = text
-            
-            # Show priority options
-            keyboard = [[InlineKeyboardButton(f"{'🔴' if p == 'Critical' else '🟠' if p == 'High' else '🟡'} {p}", 
-                                           callback_data=f'maint_priority_{p.lower()}')] for p in MAINTENANCE_PRIORITIES]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await update.message.reply_text(
-                f"Room: {context.user_data['room_number']}\n"
-                f"Issue: {text}\n\n"
-                f"Select priority level:",
-                reply_markup=reply_markup
-            )
-    
-    elif action == 'task':
-        if 'task_name' not in context.user_data:
-            context.user_data['task_name'] = text
-            user = update.effective_user
-            
-            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            log_data = [timestamp, text, user.first_name, user.id, 'Completed']
-            
-            if log_to_sheet('Task Completion Log', log_data):
-                await update.message.reply_text(f"✅ Task completed: {text}")
-                await notify_admins(
-                    context,
-                    f"📝 *Task Completed*\nTask: {text}\nCompleted by: {user.first_name}"
-                )
-            else:
-                await update.message.reply_text("❌ Failed to log task. Please try again.")
+    """Handle fallback text input - show help"""
+    await show_help(update, context)
+
+# ============= MAIN =============
 
 def main():
     """Start the bot"""
@@ -940,57 +1042,74 @@ def main():
         logger.error("TELEGRAM_BOT_TOKEN not set!")
         return
     
-    # Create application
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     
-    # Add conversation handler for staff management
-    add_staff_conv = ConversationHandler(
-        entry_points=[CommandHandler("addstaff", addstaff_command)],
+    # Staff management conversation handler
+    staff_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("addstaff", addstaff_start)],
         states={
-            AWAITING_STAFF_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_staff_id)],
-            AWAITING_STAFF_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_staff_name)],
-            AWAITING_STAFF_ROLE: [CallbackQueryHandler(finalize_staff_addition)]
+            STAFF_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_staff_id)],
+            STAFF_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_staff_name)],
+            STAFF_ROLE: [CallbackQueryHandler(finalize_staff_addition, pattern='^role_')]
         },
-        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)]
+        fallbacks=[CommandHandler("cancel", cancel_conversation)]
     )
     
-    # Add conversation handler for interactive actions
-    action_conv = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(button_callback, pattern='^(clean_start|maintenance_start|task_start)$')
-        ],
+    # Cleaning conversation handler
+    clean_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("clean", clean_command)],
         states={
-            AWAITING_ROOM: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input)],
-            AWAITING_STATUS: [CallbackQueryHandler(button_callback, pattern='^clean_status_')],
-            AWAITING_ISSUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input)],
-            AWAITING_PRIORITY: [CallbackQueryHandler(button_callback, pattern='^maint_priority_')],
-            AWAITING_TASK: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input)]
+            CLEANING_ROOM: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_cleaning_room)],
+            CLEANING_STATUS: [CallbackQueryHandler(button_callback, pattern='^clean_status_')]
         },
-        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)]
+        fallbacks=[CommandHandler("cancel", cancel_conversation)]
     )
     
-    # Add handlers
+    # Maintenance conversation handler
+    maintenance_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("maintenance", maintenance_command)],
+        states={
+            MAINTENANCE_ROOM: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_maintenance_room)],
+            MAINTENANCE_ISSUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_maintenance_issue)],
+            MAINTENANCE_PRIORITY: [CallbackQueryHandler(button_callback, pattern='^maint_priority_')]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)]
+    )
+    
+    # Task conversation handler
+    task_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("task", task_command)],
+        states={
+            TASK_NAME_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_task_name)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)]
+    )
+    
+    # Basic commands
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("getid", getid_command))
-    application.add_handler(CommandHandler("clean", clean_command))
-    application.add_handler(CommandHandler("maintenance", maintenance_command))
-    application.add_handler(CommandHandler("task", task_command))
+    
+    # Staff commands with conversation handlers
+    application.add_handler(clean_conv_handler)
+    application.add_handler(maintenance_conv_handler)
+    application.add_handler(task_conv_handler)
     application.add_handler(CommandHandler("mystats", mystats_command))
+    
+    # Admin commands
     application.add_handler(CommandHandler("admin", admin_panel))
+    application.add_handler(CommandHandler("today", today_report))
+    application.add_handler(CommandHandler("weekly", weekly_report))
     application.add_handler(CommandHandler("liststaff", liststaff_command))
     application.add_handler(CommandHandler("removestaff", removestaff_command))
     application.add_handler(CommandHandler("staffguide", staffguide_command))
-    application.add_handler(CommandHandler("today", today_report))
-    application.add_handler(CommandHandler("weekly", weekly_report))
-    application.add_handler(CommandHandler("reset", reset_tasks))
     
-    application.add_handler(add_staff_conv)
-    application.add_handler(action_conv)
+    # Conversation handler for staff management
+    application.add_handler(staff_conv_handler)
     
+    # Callback and text handlers (these should be last)
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input))
     
-    # Start bot
     logger.info("Bot starting...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
